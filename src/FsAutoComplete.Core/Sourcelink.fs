@@ -47,15 +47,58 @@ type private Document =
     IsEmbedded: bool }
 
 let private compareRepoPath (d: Document) targetFile =
-  if Environment.isWindows then
-    let s = UMX.untag d.Name
-    let s' = normalizePath s |> UMX.untag
-    let s' = UMX.tag<NormalizedRepoPathSegment> s'
-    s' = targetFile
-  else
-    let t = UMX.untag targetFile |> UMX.tag<RepoPathSegment>
-    let t' = normalizeRepoPath t
-    normalizeRepoPath d.Name = t'
+  // The targetFile may be just a filename (e.g., "list.fs") extracted via Path.GetFileName,
+  // while d.Name is a full repo path (e.g., "/__w/1/s/src/fsharp/src/FSharp.Core/list.fs").
+  // We need to handle both cases:
+  // 1. If targetFile is a full path, compare normalized paths
+  // 2. If targetFile is just a filename, compare by suffix (EndsWith)
+
+  let docNormalized: string<NormalizedRepoPathSegment> =
+    if Environment.isWindows then
+      let s = UMX.untag d.Name
+      let normalized = normalizePath s |> UMX.untag
+      UMX.tag<NormalizedRepoPathSegment> normalized
+    else
+      normalizeRepoPath d.Name
+
+  let targetNormalized: string<NormalizedRepoPathSegment> =
+    if Environment.isWindows then
+      targetFile
+    else
+      let t: string = UMX.untag targetFile
+      let tagged: string<RepoPathSegment> = UMX.tag<RepoPathSegment> t
+      normalizeRepoPath tagged
+
+  // Check if targetFile appears to be just a filename (no path separators)
+  let targetStr = UMX.untag targetNormalized
+  let isTargetJustFilename = not (targetStr.Contains("/"))
+
+  let result =
+    if isTargetJustFilename then
+      // Target is just a filename, so check if the document path ends with it
+      let docStr = UMX.untag docNormalized
+      docStr.EndsWith("/" + targetStr, System.StringComparison.Ordinal)
+      || docStr = targetStr  // Handle edge case where doc is also just a filename
+    else
+      // Both are full paths, compare directly
+      docNormalized = targetNormalized
+
+  // Debug logging when basename matches
+  let docBasename = Path.GetFileName(UMX.untag d.Name)
+  let targetBasename = Path.GetFileName(UMX.untag targetFile)
+
+  if docBasename = targetBasename then
+    logger.warn (
+      Log.setMessage "[DEBUG] compareRepoPath BASENAME MATCH: docName={docName}, docNormalized={docNorm}, targetFile={target}, targetNormalized={targetNorm}, isTargetJustFilename={isJustFilename}, result={result}"
+      >> Log.addContextDestructured "docName" (UMX.untag d.Name)
+      >> Log.addContextDestructured "docNorm" (UMX.untag docNormalized)
+      >> Log.addContextDestructured "target" (UMX.untag targetFile)
+      >> Log.addContextDestructured "targetNorm" (UMX.untag targetNormalized)
+      >> Log.addContextDestructured "isJustFilename" isTargetJustFilename
+      >> Log.addContextDestructured "result" result
+    )
+
+  result
 
 let private pdbForDll (dllPath: string<LocalPath>) =
   UMX.tag<LocalPath> (Path.ChangeExtension(UMX.untag dllPath, ".pdb"))
@@ -270,6 +313,13 @@ let tryFetchSourcelinkFile (dllPath: string<LocalPath>) (targetFile: string<Norm
       >> Log.addContextDestructured "file" targetFile
     )
 
+    logger.warn (
+      Log.setMessage "[DEBUG] tryFetchSourcelinkFile called: dllPath={dll}, targetFile={target}, isWindows={isWin}"
+      >> Log.addContextDestructured "dll" (UMX.untag dllPath)
+      >> Log.addContextDestructured "target" (UMX.untag targetFile)
+      >> Log.addContextDestructured "isWin" Environment.isWindows
+    )
+
     match tryGetSourcesForDll dllPath with
     | None -> return Error NoInformation
     | Some sourceReaderProvider ->
@@ -282,6 +332,12 @@ let tryFetchSourcelinkFile (dllPath: string<LocalPath>) (targetFile: string<Norm
         let docs = documentsFromReader sourceReader
 
         let doc = docs |> Seq.tryFind (fun d -> compareRepoPath d targetFile)
+
+        logger.warn (
+          Log.setMessage "[DEBUG] Document search complete: found={found}, targetFile={target}"
+          >> Log.addContextDestructured "found" (Option.isSome doc)
+          >> Log.addContextDestructured "target" (UMX.untag targetFile)
+        )
 
         match doc with
         | None ->

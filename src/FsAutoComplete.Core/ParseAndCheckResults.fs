@@ -94,6 +94,20 @@ type ParseAndCheckResults
       let declarations =
         checkResults.GetDeclarationLocation(pos.Line, int col, lineStr, identIsland, preferFlag = false)
 
+      // Log the raw FCS result type
+      let declTypeInfo =
+        match declarations with
+        | FindDeclResult.DeclFound range ->
+            sprintf "DeclFound(FileName='%s', Start=%d:%d, End=%d:%d)"
+              range.FileName range.StartLine range.StartColumn range.EndLine range.EndColumn
+        | FindDeclResult.DeclNotFound reason -> sprintf "DeclNotFound(%A)" reason
+        | FindDeclResult.ExternalDecl(asm, sym) -> sprintf "ExternalDecl(assembly='%s', sym=%A)" asm sym
+
+      logger.warn (
+        Log.setMessage "[DEBUG] FCS GetDeclarationLocation RAW result: {declInfo}"
+        >> Log.addContextDestructured "declInfo" declTypeInfo
+      )
+
       let decompile assembly externalSym =
         match Decompiler.tryFindExternalDeclaration checkResults (assembly, externalSym) with
         | Ok extDec -> ResultOrString.Ok(FindDeclarationResult.ExternalDeclaration extDec)
@@ -193,8 +207,28 @@ type ParseAndCheckResults
             >> Log.addContextDestructured "range" range
           )
 
+          // Detailed logging to understand what FCS returns vs what we extract
+          let rawFileName = rangeInNonexistentFile.FileName
+          let extractedName = getFileName rangeInNonexistentFile |> FSharp.UMX.UMX.untag
+          let startsWithSlash = rawFileName.StartsWith("/")
+          let containsBackslash = rawFileName.Contains("\\")
+
+          logger.warn (
+            Log.setMessage "[DEBUG] DeclFound FileName analysis: raw='{raw}', extracted='{extracted}', startsWithSlash={startsSlash}, containsBackslash={hasBackslash}"
+            >> Log.addContextDestructured "raw" rawFileName
+            >> Log.addContextDestructured "extracted" extractedName
+            >> Log.addContextDestructured "startsSlash" startsWithSlash
+            >> Log.addContextDestructured "hasBackslash" containsBackslash
+          )
+
           match tryRecoverExternalSymbolForNonexistentDecl rangeInNonexistentFile with
           | Ok(assemblyFile, sourceFile) ->
+            logger.warn (
+              Log.setMessage "[DEBUG] tryRecoverExternalSymbolForNonexistentDecl succeeded: assemblyFile={asm}, sourceFile={src}"
+              >> Log.addContextDestructured "asm" (FSharp.UMX.UMX.untag assemblyFile)
+              >> Log.addContextDestructured "src" (FSharp.UMX.UMX.untag sourceFile)
+            )
+
             match! Sourcelink.tryFetchSourcelinkFile assemblyFile sourceFile with
             | Ok localFilePath ->
               return
@@ -206,6 +240,12 @@ type ParseAndCheckResults
             | Error reason -> return ResultOrString.Error(sprintf "%A" reason)
           | Error e -> return Error e
         | FindDeclResult.ExternalDecl(assembly, externalSym) ->
+          logger.warn (
+            Log.setMessage "[DEBUG] FCS returned ExternalDecl: assembly={asm}, externalSym={sym}"
+            >> Log.addContextDestructured "asm" assembly
+            >> Log.addContextDestructured "sym" (sprintf "%A" externalSym)
+          )
+
           // not enough info on external symbols to get a range-like thing :(
           match tryGetSourceRangeForSymbol externalSym with
           | Some(sourceFile, pos) ->
