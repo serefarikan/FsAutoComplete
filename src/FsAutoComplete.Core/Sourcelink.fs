@@ -46,12 +46,19 @@ type private Document =
     Language: System.Guid
     IsEmbedded: bool }
 
-let private compareRepoPath (d: Document) targetFile =
-  // The targetFile may be just a filename (e.g., "list.fs") extracted via Path.GetFileName,
-  // while d.Name is a full repo path (e.g., "/__w/1/s/src/fsharp/src/FSharp.Core/list.fs").
-  // We need to handle both cases:
-  // 1. If targetFile is a full path, compare normalized paths
-  // 2. If targetFile is just a filename, compare by suffix (EndsWith)
+let private compareRepoPath (d: Document) fcsPath =
+  // The fcsPath is the full path from FCS (normalized, backslashes converted to forward slashes).
+  // FCS may prepend a workspace prefix if the PDB path wasn't absolute on this platform.
+  // The d.Name is a PDB document entry (the original path from when the DLL was compiled).
+  //
+  // The PDB document should be a SUFFIX of (or equal to) the FCS path:
+  // - FCS path: /workspaces/project/D:/a/_work/1/s/src/FSharp.Core/list.fs
+  // - PDB doc:                      D:/a/_work/1/s/src/FSharp.Core/list.fs
+  //   → fcsPath.EndsWith("/" + pdbDoc) = true
+  //
+  // - FCS path: /__w/1/s/src/fsharp/src/FSharp.Core/list.fs
+  // - PDB doc:  /__w/1/s/src/fsharp/src/FSharp.Core/list.fs
+  //   → fcsPath == pdbDoc = true
 
   let docNormalized: string<NormalizedRepoPathSegment> =
     if Environment.isWindows then
@@ -61,40 +68,33 @@ let private compareRepoPath (d: Document) targetFile =
     else
       normalizeRepoPath d.Name
 
-  let targetNormalized: string<NormalizedRepoPathSegment> =
+  let fcsNormalized: string<NormalizedRepoPathSegment> =
     if Environment.isWindows then
-      targetFile
+      fcsPath
     else
-      let t: string = UMX.untag targetFile
+      let t: string = UMX.untag fcsPath
       let tagged: string<RepoPathSegment> = UMX.tag<RepoPathSegment> t
       normalizeRepoPath tagged
 
-  // Check if targetFile appears to be just a filename (no path separators)
-  let targetStr = UMX.untag targetNormalized
-  let isTargetJustFilename = not (targetStr.Contains("/"))
+  let docStr = UMX.untag docNormalized
+  let fcsStr = UMX.untag fcsNormalized
 
+  // PDB doc should be suffix of (or equal to) FCS path
   let result =
-    if isTargetJustFilename then
-      // Target is just a filename, so check if the document path ends with it
-      let docStr = UMX.untag docNormalized
-      docStr.EndsWith("/" + targetStr, System.StringComparison.Ordinal)
-      || docStr = targetStr  // Handle edge case where doc is also just a filename
-    else
-      // Both are full paths, compare directly
-      docNormalized = targetNormalized
+    fcsStr = docStr
+    || fcsStr.EndsWith("/" + docStr, System.StringComparison.Ordinal)
 
   // Debug logging when basename matches
   let docBasename = Path.GetFileName(UMX.untag d.Name)
-  let targetBasename = Path.GetFileName(UMX.untag targetFile)
+  let fcsBasename = Path.GetFileName(UMX.untag fcsPath)
 
-  if docBasename = targetBasename then
+  if docBasename = fcsBasename then
     logger.warn (
-      Log.setMessage "[DEBUG] compareRepoPath BASENAME MATCH: docName={docName}, docNormalized={docNorm}, targetFile={target}, targetNormalized={targetNorm}, isTargetJustFilename={isJustFilename}, result={result}"
+      Log.setMessage "[DEBUG] compareRepoPath: docName={docName}, docNormalized={docNorm}, fcsPath={fcs}, fcsNormalized={fcsNorm}, result={result}"
       >> Log.addContextDestructured "docName" (UMX.untag d.Name)
-      >> Log.addContextDestructured "docNorm" (UMX.untag docNormalized)
-      >> Log.addContextDestructured "target" (UMX.untag targetFile)
-      >> Log.addContextDestructured "targetNorm" (UMX.untag targetNormalized)
-      >> Log.addContextDestructured "isJustFilename" isTargetJustFilename
+      >> Log.addContextDestructured "docNorm" docStr
+      >> Log.addContextDestructured "fcs" (UMX.untag fcsPath)
+      >> Log.addContextDestructured "fcsNorm" fcsStr
       >> Log.addContextDestructured "result" result
     )
 

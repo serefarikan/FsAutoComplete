@@ -143,19 +143,36 @@ This is **too aggressive** - it throws away all path information, then hopes the
 
 The `.NET 9 "accidental success"` only worked because `Path.GetFileName` on Linux doesn't recognize backslashes as separators, so it accidentally preserved the full Windows-style PDB path.
 
-## Current Workaround (Implemented)
+## Implemented Fix (Improved)
 
-The current fix modifies `compareRepoPath` to handle basename-only targets:
+The improved fix addresses the root cause instead of working around it:
 
+**1. Changed `getFileName` (ParseAndCheckResults.fs):**
 ```fsharp
-if isTargetJustFilename then
-  docStr.EndsWith("/" + targetStr, StringComparison.Ordinal)
-  || docStr = targetStr
-else
-  docNormalized = targetNormalized
+let getFileName (loc: range) =
+  // Keep the full FCS path, just normalize backslashes to forward slashes.
+  // FCS may prepend a workspace prefix if the PDB path isn't absolute on this platform.
+  // The comparison in Sourcelink.compareRepoPath will handle the prefix via suffix matching.
+  let normalized = loc.FileName.Replace('\\', '/')
+  UMX.tag<NormalizedRepoPathSegment> normalized
 ```
 
-This works but is a workaround for the upstream logic flaw in `getFileName`.
+**2. Changed `compareRepoPath` (Sourcelink.fs):**
+```fsharp
+// PDB doc should be suffix of (or equal to) FCS path
+let result =
+  fcsStr = docStr
+  || fcsStr.EndsWith("/" + docStr, System.StringComparison.Ordinal)
+```
+
+This correctly handles both scenarios:
+- When FCS adds workspace prefix: suffix matching finds the PDB doc
+- When FCS returns path as-is: exact matching works
+
+**Advantages over the original workaround:**
+- Uses full path information instead of just basename
+- Correctly handles files with same name in different directories
+- More robust and semantically correct
 
 ## Confirmed: FCS Path Resolution Behavior
 
