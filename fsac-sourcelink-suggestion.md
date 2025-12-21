@@ -217,27 +217,101 @@ The bug is a combination of factors:
 3. **FSAC uses Path.GetFileName**: Which behaves differently for Windows vs Linux paths
 4. **.NET 9 works by accident**: The "wrong" behavior accidentally produces the right result
 
-## Remaining Questions
+## Verified Test Results with Improved Fix
 
-1. **Why does `getFileName` use `Path.GetFileName` on non-Windows?**
-   - Was this intentional to handle some edge case?
-   - Or was it a bug from the beginning that happened to work due to Windows PDB paths?
+### .NET 10 Environment (FSharp.Core 10.0.100)
 
-2. **What's the correct fix location?**
-   - Fix in `getFileName` (don't discard path info)?
-   - Fix in `compareRepoPath` (smarter matching)?
-   - Both?
+```
+[DEBUG] FCS GetDeclarationLocation RAW result:
+  DeclFound(FileName='/__w/1/s/src/fsharp/src/FSharp.Core/list.fs', ...)
 
-## Test Results Summary
+[DEBUG] DeclFound FileName analysis:
+  raw='/__w/1/s/src/fsharp/src/FSharp.Core/list.fs'
+  extracted='/__w/1/s/src/fsharp/src/FSharp.Core/list.fs'  ← Full path preserved!
+  startsWithSlash=True, containsBackslash=False
 
-| Environment | FSharp.Core | FCS Raw FileName | Path.GetFileName Result | PDB Doc | Match? |
-|-------------|-------------|------------------|------------------------|---------|--------|
-| .NET 10 | 10.0.100 | `/__w/1/s/.../list.fs` | `list.fs` | `/__w/1/s/.../list.fs` | No* |
-| .NET 9 | 9.0.303 | `/workspaces/.../D:\a\_work\...\prim-types.fs` | `D:\a\_work\...\prim-types.fs` | `D:\a\_work\...\prim-types.fs` | Yes |
+[DEBUG] compareRepoPath:
+  fcsPath=/__w/1/s/src/fsharp/src/FSharp.Core/list.fs
+  docNormalized=/__w/1/s/src/fsharp/src/FSharp.Core/list.fs
+  result=True  ← EXACT MATCH
 
-*Fixed with EndsWith matching in compareRepoPath
+[DEBUG] Document search complete: found=True
+```
+
+**Match type:** Exact equality (`fcsPath == pdbDoc`)
+
+### .NET 9 Environment (FSharp.Core 9.0.303)
+
+```
+[DEBUG] FCS GetDeclarationLocation RAW result:
+  DeclFound(FileName='/workspaces/devcont-fs-src-test/D:\a\_work\1\s\src\FSharp.Core\prim-types.fs', ...)
+
+[DEBUG] DeclFound FileName analysis:
+  raw='/workspaces/devcont-fs-src-test/D:\a\_work\1\s\src\FSharp.Core\prim-types.fs'
+  extracted='/workspaces/devcont-fs-src-test/D:/a/_work/1/s/src/FSharp.Core/prim-types.fs'
+             ↑ backslashes normalized to forward slashes
+  startsWithSlash=True, containsBackslash=True
+
+[DEBUG] compareRepoPath:
+  fcsPath=/workspaces/devcont-fs-src-test/D:/a/_work/1/s/src/FSharp.Core/prim-types.fs
+  docNormalized=D:/a/_work/1/s/src/FSharp.Core/prim-types.fs
+  result=True  ← SUFFIX MATCH
+
+  fcsPath.EndsWith("/" + pdbDoc) =
+  "/workspaces/.../D:/a/_work/.../prim-types.fs".EndsWith("/D:/a/_work/.../prim-types.fs") = TRUE
+
+[DEBUG] Document search complete: found=True
+```
+
+**Match type:** Suffix matching (`fcsPath.EndsWith("/" + pdbDoc)`)
+
+## Why This Approach is Better
+
+### Comparison: Original Workaround vs Improved Fix
+
+| Aspect | Original Workaround | Improved Fix |
+|--------|---------------------|--------------|
+| **Path info used** | Basename only (`list.fs`) | Full path |
+| **Match strategy** | `pdbDoc.EndsWith(basename)` | `fcsPath.EndsWith(pdbDoc)` or exact |
+| **Same-name files** | Could match wrong file | Correctly distinguished |
+| **Semantic correctness** | Hack that happens to work | Matches FCS/PDB relationship |
+
+### Why Suffix Matching on FCS Path is Correct
+
+The key insight is understanding the relationship between FCS path and PDB document:
+
+```
+FCS path = [optional workspace prefix] + PDB document path
+```
+
+Therefore:
+- **PDB doc is always a suffix of FCS path** (or equal to it)
+- Checking `fcsPath.EndsWith("/" + pdbDoc)` correctly handles the prefix
+- Checking `fcsPath == pdbDoc` handles the no-prefix case
+
+### Why Basename Matching is Fragile
+
+The original workaround used basename matching:
+```fsharp
+pdbDoc.EndsWith("/" + basename)  // e.g., pdbDoc.EndsWith("/list.fs")
+```
+
+This is fragile because:
+1. **Multiple files with same name:** If PDB has both `src/FSharp.Core/list.fs` and `tests/list.fs`, basename matching could return the wrong one
+2. **Discards useful information:** The full path is available, why throw it away?
+3. **Relies on accident:** Only worked in .NET 9 because `Path.GetFileName` accidentally preserved Windows paths on Linux
+
+### Summary
+
+| Environment | FCS Path | PDB Doc | Match Type | Result |
+|-------------|----------|---------|------------|--------|
+| .NET 10 | `/__w/.../list.fs` | `/__w/.../list.fs` | Exact | ✓ |
+| .NET 9 | `/workspaces/.../D:/a/_work/.../prim-types.fs` | `D:/a/_work/.../prim-types.fs` | Suffix | ✓ |
+
+Both scenarios work correctly with the improved fix!
 
 ---
 
 *Created: 2025-12-21*
+*Updated: 2025-12-21 - Added verified test results from both environments*
 *Related: fsac-sourcelink-bug.md*
