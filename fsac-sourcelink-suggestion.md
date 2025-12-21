@@ -2,9 +2,9 @@
 
 ## Summary
 
-The current FSAC SourceLink implementation has a logic flaw: it unnecessarily discards path information from the FCS result, then tries to recover by matching against PDB document entries. A simpler fix would be to use the FCS result directly.
+The FSAC SourceLink implementation can be made more robust. The original code discards path information from the FCS result, then tries to match against PDB document entries using just the basename. A more robust approach preserves the full path and uses suffix matching.
 
-## Current Flow (Flawed)
+## Original Flow (Before Fix)
 
 ```
 1. FCS returns: DeclFound { FileName = "/__w/1/s/src/fsharp/src/FSharp.Core/list.fs" }
@@ -40,7 +40,7 @@ The current FSAC SourceLink implementation has a logic flaw: it unnecessarily di
 
 **Key observation:** `raw` and `docName` are IDENTICAL. If FSAC used `raw` directly for matching, it would work without any workaround.
 
-## The Flawed Code
+## The Original Code
 
 ```fsharp
 // src/FsAutoComplete.Core/ParseAndCheckResults.fs, lines 45-49
@@ -143,11 +143,13 @@ This is **too aggressive** - it throws away all path information, then hopes the
 
 The `.NET 9 "accidental success"` only worked because `Path.GetFileName` on Linux doesn't recognize backslashes as separators, so it accidentally preserved the full Windows-style PDB path.
 
-## Implemented Fix (Improved)
+## Implemented Fix
 
-The improved fix addresses the root cause instead of working around it:
+The fix involves coordinated changes to both `getFileName` and `compareRepoPath`:
 
 **1. Changed `getFileName` (ParseAndCheckResults.fs):**
+
+Preserve the full FCS path instead of extracting just the basename:
 ```fsharp
 let getFileName (loc: range) =
   // Keep the full FCS path, just normalize backslashes to forward slashes.
@@ -158,6 +160,8 @@ let getFileName (loc: range) =
 ```
 
 **2. Changed `compareRepoPath` (Sourcelink.fs):**
+
+Use suffix matching to handle the optional workspace prefix:
 ```fsharp
 // PDB doc should be suffix of (or equal to) FCS path
 let result =
@@ -165,14 +169,15 @@ let result =
   || fcsStr.EndsWith("/" + docStr, System.StringComparison.Ordinal)
 ```
 
-This correctly handles both scenarios:
-- When FCS adds workspace prefix: suffix matching finds the PDB doc
-- When FCS returns path as-is: exact matching works
+**Why both changes are needed together:**
+- `getFileName` now provides the full normalized path (not just basename)
+- `compareRepoPath` uses suffix matching to handle workspace prefix that FCS may add
+- Neither change alone would be sufficient
 
-**Advantages over the original workaround:**
+**This approach is more robust because:**
 - Uses full path information instead of just basename
 - Correctly handles files with same name in different directories
-- More robust and semantically correct
+- Properly accounts for FCS workspace prefix behavior
 
 ## Confirmed: FCS Path Resolution Behavior
 
