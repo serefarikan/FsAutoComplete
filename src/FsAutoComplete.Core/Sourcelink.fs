@@ -80,8 +80,25 @@ let private compareRepoPath (d: Document) fcsPath =
   let fcsStr = UMX.untag fcsNormalized
 
   // PDB doc should be suffix of (or equal to) FCS path
-  fcsStr = docStr
-  || fcsStr.EndsWith("/" + docStr, System.StringComparison.Ordinal)
+  let result =
+    fcsStr = docStr
+    || fcsStr.EndsWith("/" + docStr, System.StringComparison.Ordinal)
+
+  // Debug logging when basename matches
+  let docBasename = Path.GetFileName(UMX.untag d.Name)
+  let fcsBasename = Path.GetFileName(UMX.untag fcsPath)
+
+  if docBasename = fcsBasename then
+    logger.warn (
+      Log.setMessage "[DEBUG] compareRepoPath: docName={docName}, docNormalized={docNorm}, fcsPath={fcs}, fcsNormalized={fcsNorm}, result={result}"
+      >> Log.addContextDestructured "docName" (UMX.untag d.Name)
+      >> Log.addContextDestructured "docNorm" docStr
+      >> Log.addContextDestructured "fcs" (UMX.untag fcsPath)
+      >> Log.addContextDestructured "fcsNorm" fcsStr
+      >> Log.addContextDestructured "result" result
+    )
+
+  result
 
 let private pdbForDll (dllPath: string<LocalPath>) =
   UMX.tag<LocalPath> (Path.ChangeExtension(UMX.untag dllPath, ".pdb"))
@@ -296,6 +313,13 @@ let tryFetchSourcelinkFile (dllPath: string<LocalPath>) (targetFile: string<Norm
       >> Log.addContextDestructured "file" targetFile
     )
 
+    logger.warn (
+      Log.setMessage "[DEBUG] tryFetchSourcelinkFile called: dllPath={dll}, targetFile={target}, isWindows={isWin}"
+      >> Log.addContextDestructured "dll" (UMX.untag dllPath)
+      >> Log.addContextDestructured "target" (UMX.untag targetFile)
+      >> Log.addContextDestructured "isWin" Environment.isWindows
+    )
+
     match tryGetSourcesForDll dllPath with
     | None -> return Error NoInformation
     | Some sourceReaderProvider ->
@@ -308,6 +332,12 @@ let tryFetchSourcelinkFile (dllPath: string<LocalPath>) (targetFile: string<Norm
         let docs = documentsFromReader sourceReader
 
         let doc = docs |> Seq.tryFind (fun d -> compareRepoPath d targetFile)
+
+        logger.warn (
+          Log.setMessage "[DEBUG] Document search complete: found={found}, targetFile={target}"
+          >> Log.addContextDestructured "found" (Option.isSome doc)
+          >> Log.addContextDestructured "target" (UMX.untag targetFile)
+        )
 
         match doc with
         | None ->
