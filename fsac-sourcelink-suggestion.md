@@ -310,13 +310,40 @@ This is fragile because:
 
 | Environment | FCS Path | PDB Doc | Match Type | Result |
 |-------------|----------|---------|------------|--------|
-| .NET 10 | `/__w/.../list.fs` | `/__w/.../list.fs` | Exact | ✓ |
-| .NET 9 | `/workspaces/.../D:/a/_work/.../prim-types.fs` | `D:/a/_work/.../prim-types.fs` | Suffix | ✓ |
+| .NET 10 Linux | `/__w/.../list.fs` | `/__w/.../list.fs` | Exact | ✓ |
+| .NET 9 Linux | `/workspaces/.../D:/a/_work/.../prim-types.fs` | `D:/a/_work/.../prim-types.fs` | Suffix | ✓ |
+| .NET 10 Windows | `d:/a/_work/.../fslib-extra-pervasives.fs` | `d:/a/_work/.../fslib-extra-pervasives.fs` | Exact | ✓ |
 
-Both scenarios work correctly with the improved fix!
+All scenarios work correctly with the improved fix!
+
+## Windows-Specific Bug (Discovered During Testing)
+
+When testing on Windows, an additional bug was discovered in `compareRepoPath`:
+
+**Problem:** On Windows, `normalizePath` (which uses `Path.GetFullPath`) preserves backslashes in the PDB document path, but the FCS path already has forward slashes (from `getFileName`). This caused comparison failures:
+
+```
+docNormalized = d:\a\_work\1\s\src\fsharp\src\FSharp.Core\fslib-extra-pervasives.fs  (backslashes)
+fcsNormalized = d:/a/_work/1/s/src/fsharp/src/FSharp.Core/fslib-extra-pervasives.fs  (forward slashes)
+result = False  ← MISMATCH!
+```
+
+**Fix:** Added `.Replace("\\", "/")` when normalizing PDB document paths on Windows:
+
+```fsharp
+let docNormalized: string<NormalizedRepoPathSegment> =
+  if Environment.isWindows then
+    let s = UMX.untag d.Name
+    let normalized = normalizePath s |> UMX.untag
+    // Convert backslashes to forward slashes for consistent comparison
+    UMX.tag<NormalizedRepoPathSegment> (normalized.Replace("\\", "/"))
+  else
+    normalizeRepoPath d.Name
+```
 
 ---
 
 *Created: 2025-12-21*
 *Updated: 2025-12-21 - Added verified test results from both environments*
+*Updated: 2025-12-22 - Added Windows-specific bug fix (backslash normalization)*
 *Related: fsac-sourcelink-bug.md*

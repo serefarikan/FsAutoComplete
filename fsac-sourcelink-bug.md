@@ -334,52 +334,77 @@ The comparison in compareRepoPath:
 
 ## The Fix
 
-### Modified File: `src/FsAutoComplete.Core/Sourcelink.fs`
+### Overview
 
-The `compareRepoPath` function was modified to:
-1. Detect when `targetFile` is just a filename (no `/` separator)
-2. Use `EndsWith("/" + filename)` matching for filename-only targets
-3. Use exact equality when both are full paths (preserving original behavior)
+The fix involves coordinated changes to two files:
+1. `ParseAndCheckResults.fs` - Keep full FCS path instead of extracting basename
+2. `Sourcelink.fs` - Use suffix matching and consistent path normalization
+
+### Modified File 1: `src/FsAutoComplete.Core/ParseAndCheckResults.fs`
+
+The `getFileName` function was modified to preserve the full FCS path:
 
 ```fsharp
-let private compareRepoPath (d: Document) targetFile =
-  // ... normalization code ...
-
-  // Check if targetFile appears to be just a filename (no path separators)
-  let targetStr = UMX.untag targetNormalized
-  let isTargetJustFilename = not (targetStr.Contains("/"))
-
-  let result =
-    if isTargetJustFilename then
-      // Target is just a filename, so check if the document path ends with it
-      let docStr = UMX.untag docNormalized
-      docStr.EndsWith("/" + targetStr, System.StringComparison.Ordinal)
-      || docStr = targetStr  // Handle edge case where doc is also just a filename
-    else
-      // Both are full paths, compare directly
-      docNormalized = targetNormalized
-
-  result
+let getFileName (loc: range) =
+  // Keep the full FCS path, just normalize backslashes to forward slashes.
+  // FCS may prepend a workspace prefix if the PDB path isn't absolute on this platform.
+  // The comparison in Sourcelink.compareRepoPath will handle the prefix via suffix matching.
+  let normalized = loc.FileName.Replace('\\', '/')
+  UMX.tag<NormalizedRepoPathSegment> normalized
 ```
 
-## Files Modified (with debug logging)
+### Modified File 2: `src/FsAutoComplete.Core/Sourcelink.fs`
 
-Current state includes debug logging that should be removed for production:
+The `compareRepoPath` function was modified to:
+1. Use suffix matching (PDB doc is suffix of FCS path, or equal to it)
+2. **Normalize backslashes to forward slashes on Windows** for consistent comparison
+
+```fsharp
+let private compareRepoPath (d: Document) fcsPath =
+  let docNormalized: string<NormalizedRepoPathSegment> =
+    if Environment.isWindows then
+      let s = UMX.untag d.Name
+      let normalized = normalizePath s |> UMX.untag
+      // Convert backslashes to forward slashes for consistent comparison
+      UMX.tag<NormalizedRepoPathSegment> (normalized.Replace("\\", "/"))
+    else
+      normalizeRepoPath d.Name
+
+  let fcsNormalized: string<NormalizedRepoPathSegment> =
+    if Environment.isWindows then fcsPath
+    else normalizeRepoPath (UMX.tag<RepoPathSegment> (UMX.untag fcsPath))
+
+  let docStr = UMX.untag docNormalized
+  let fcsStr = UMX.untag fcsNormalized
+
+  // PDB doc should be suffix of (or equal to) FCS path
+  fcsStr = docStr
+  || fcsStr.EndsWith("/" + docStr, System.StringComparison.Ordinal)
+```
+
+### Windows-Specific Bug (Discovered During Testing)
+
+When testing on Windows, an additional bug was discovered:
+
+**Problem:** On Windows, `normalizePath` (which uses `Path.GetFullPath`) preserves backslashes, but the FCS path already has forward slashes. This caused comparison failures:
+
+```
+docNormalized = d:\a\_work\1\s\src\fsharp\src\FSharp.Core\fslib-extra-pervasives.fs  (backslashes)
+fcsNormalized = d:/a/_work/1/s/src/fsharp/src/FSharp.Core/fslib-extra-pervasives.fs  (forward slashes)
+result = False  ← MISMATCH!
+```
+
+**Fix:** Added `.Replace("\\", "/")` when normalizing PDB document paths on Windows.
+
+## Files Modified
 
 ### 1. `src/FsAutoComplete.Core/ParseAndCheckResults.fs`
 
-Debug logs added at:
-- Line ~97: Logs FCS `GetDeclarationLocation` result type
-- Line ~201: Logs full FileName from FCS and extracted sourceFile
-- Line ~209: Logs assembly and source file after recovery
-- Line ~226: Logs when FCS returns `ExternalDecl`
+- `getFileName` function: Now preserves full FCS path with backslash normalization
 
 ### 2. `src/FsAutoComplete.Core/Sourcelink.fs`
 
-Debug logs added at:
-- Line ~88-99: Logs comparison details when basename matches
-- Line ~305: Logs entry to `tryFetchSourcelinkFile`
-- Line ~325: Logs document search result
+- `compareRepoPath` function: Uses suffix matching and consistent forward-slash normalization on all platforms
 
 ## Testing the Fix
 
@@ -517,3 +542,6 @@ The SourceLink JSON maps paths like `/__w/1/s/src/fsharp/*` to GitHub raw URLs.
 
 *Updated: 2025-12-21*
 *Root cause confirmed via .NET 9 environment testing - PDB path format difference, not FCS behavior change*
+
+*Updated: 2025-12-22*
+*Windows testing revealed additional backslash normalization bug - fixed and debug logging removed*
