@@ -357,11 +357,6 @@ type ParseAndCheckResults
       | _ -> Some tip
 
   member x.TryGetToolTipEnhanced (pos: Position) (lineStr: LineStr) : option<TryGetToolTipEnhancedResult> =
-    logger.warn (
-      Log.setMessage "[DEBUG-HOVER] TryGetToolTipEnhanced called: pos={pos}"
-      >> Log.addContextDestructured "pos" pos
-    )
-
     let (|EmptyTooltip|_|) (ToolTipText elems) =
       match elems with
       | [] -> Some()
@@ -427,12 +422,6 @@ type ParseAndCheckResults
               None
             | Some(signature, footer) ->
               let assemblyFileName = symbol.Symbol.Assembly.FileName |> Option.defaultValue ""
-              logger.warn (
-                Log.setMessage "[DEBUG-HOVER] TryGetToolTipEnhanced returning Symbol: XmlDocSig={xmlSig}, AssemblySimpleName={simpleName}, AssemblyFileName={fileName}"
-                >> Log.addContextDestructured "xmlSig" resolvedType.XmlDocSig
-                >> Log.addContextDestructured "simpleName" symbol.Symbol.Assembly.SimpleName
-                >> Log.addContextDestructured "fileName" assemblyFileName
-              )
               { ToolTipText = tip
                 Signature = signature
                 Footer = footer
@@ -443,11 +432,6 @@ type ParseAndCheckResults
               |> Some
 
   member __.TryGetFormattedDocumentation (pos: Position) (lineStr: LineStr) =
-    logger.warn (
-      Log.setMessage "[DEBUG-INFOPANEL] TryGetFormattedDocumentation called: pos={pos}, lineStr={line}"
-      >> Log.addContextDestructured "pos" pos
-      >> Log.addContextDestructured "line" lineStr
-    )
     match Lexer.findLongIdents (uint32 pos.Column, lineStr) with
     | None -> Error "Cannot find ident"
     | Some(col, identIsland) ->
@@ -489,11 +473,6 @@ type ParseAndCheckResults
             | _ -> Ok(Some tip, None, signature, footer, cn)
 
   member x.TryGetFormattedDocumentationForSymbol (xmlSig: string) (assembly: string) =
-    logger.warn (
-      Log.setMessage "[DEBUG-INFOPANEL] TryGetFormattedDocumentationForSymbol called: xmlSig={xmlSig}, assembly={asm}"
-      >> Log.addContextDestructured "xmlSig" xmlSig
-      >> Log.addContextDestructured "asm" assembly
-    )
     let entities = x.GetAllEntities false
 
     let ent =
