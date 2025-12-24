@@ -1021,21 +1021,10 @@ let private tryGetXmlDocMember (xmlDoc: FSharpXmlDoc) =
       TryGetXmlDocMemberResult.Some xmlDoc
 
     | FSharpXmlDoc.FromXmlFile(dllFile, memberName) ->
-      logger.warn (
-        Log.setMessage "[DEBUG-XMLDOC] FromXmlFile: dllFile={dll}, memberName={member}"
-        >> Log.addContextDestructured "dll" dllFile
-        >> Log.addContextDestructured "member" memberName
-      )
       match getXmlDoc dllFile with
       | Some doc ->
-        logger.warn (
-          Log.setMessage "[DEBUG-XMLDOC] XML doc loaded, docCount={count}, looking for member={member}"
-          >> Log.addContextDestructured "count" doc.Count
-          >> Log.addContextDestructured "member" memberName
-        )
         match doc.TryGetValue memberName with
         | true, docmember ->
-          logger.warn (Log.setMessage "[DEBUG-XMLDOC] Found member in XML doc")
           TryGetXmlDocMemberResult.Some docmember
         | false, _ ->
           // Fallback: For constructors (M:Type.#ctor), try the type docs (T:Type) instead
@@ -1047,27 +1036,14 @@ let private tryGetXmlDocMember (xmlDoc: FSharpXmlDoc) =
               None
           match fallbackKey with
           | Some typeKey ->
-            logger.warn (
-              Log.setMessage "[DEBUG-XMLDOC] Constructor not found, trying type fallback: {typeKey}"
-              >> Log.addContextDestructured "typeKey" typeKey
-            )
             match doc.TryGetValue typeKey with
             | true, docmember ->
-              logger.warn (Log.setMessage "[DEBUG-XMLDOC] Found type docs as fallback")
               TryGetXmlDocMemberResult.Some docmember
             | false, _ ->
-              logger.warn (Log.setMessage "[DEBUG-XMLDOC] Type fallback also not found")
               TryGetXmlDocMemberResult.None
           | None ->
-            // Log some keys to see what format they're in
-            let sampleKeys = doc |> Seq.truncate 5 |> Seq.map (fun kv -> kv.Key) |> Seq.toList
-            logger.warn (
-              Log.setMessage "[DEBUG-XMLDOC] Member NOT found. Sample keys: {keys}"
-              >> Log.addContextDestructured "keys" sampleKeys
-            )
             TryGetXmlDocMemberResult.None
       | _ ->
-        logger.warn (Log.setMessage "[DEBUG-XMLDOC] getXmlDoc returned None")
         TryGetXmlDocMemberResult.None
 
     | FSharpXmlDoc.None -> TryGetXmlDocMemberResult.None
