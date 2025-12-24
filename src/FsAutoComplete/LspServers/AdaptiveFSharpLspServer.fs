@@ -1080,6 +1080,48 @@ type AdaptiveFSharpLspServer
             match TipFormatter.tryFormatTipEnhanced tooltipResult.ToolTipText formatCommentStyle with
             | TipFormatter.TipFormatterResult.Success tooltipInfo ->
 
+              // DEBUG: Log hover tooltip info
+              logger.warn (
+                Log.setMessage "[DEBUG-HOVER] DocComment empty={isEmpty}, length={len}"
+                >> Log.addContextDestructured "isEmpty" (String.IsNullOrWhiteSpace tooltipInfo.DocComment)
+                >> Log.addContextDestructured "len" (if tooltipInfo.DocComment = null then -1 else tooltipInfo.DocComment.Length)
+              )
+
+              // Fallback: If doc comment is empty and we have symbol info, try XML file lookup
+              let docComment, hasTruncatedExamples =
+                match tooltipResult.SymbolInfo with
+                | TryGetToolTipEnhancedResult.Symbol symbolInfo
+                    when String.IsNullOrWhiteSpace tooltipInfo.DocComment ->
+                  // DEBUG: Log symbol info
+                  logger.warn (
+                    Log.setMessage "[DEBUG-HOVER] Symbol: XmlDocSig={xmlSig}, Assembly={asm}"
+                    >> Log.addContextDestructured "xmlSig" symbolInfo.XmlDocSig
+                    >> Log.addContextDestructured "asm" symbolInfo.Assembly
+                  )
+                  // Attempt to load documentation from XML file
+                  let xmlResult = TipFormatter.tryFormatDocumentationFromXmlSig symbolInfo.XmlDocSig symbolInfo.Assembly
+                  // DEBUG: Log XML lookup result
+                  logger.warn (
+                    Log.setMessage "[DEBUG-HOVER] XML lookup result type={resultType}"
+                    >> Log.addContextDestructured "resultType" (xmlResult.GetType().Name)
+                  )
+                  match xmlResult with
+                  | TipFormatter.TipFormatterResult.Success xmlDocComment ->
+                    logger.warn (Log.setMessage "[DEBUG-HOVER] XML lookup SUCCESS, docLen={len}" >> Log.addContextDestructured "len" xmlDocComment.Length)
+                    xmlDocComment, false  // XML docs from file, no truncated examples tracking
+                  | TipFormatter.TipFormatterResult.None ->
+                    logger.warn (Log.setMessage "[DEBUG-HOVER] XML lookup returned None")
+                    tooltipInfo.DocComment, tooltipInfo.HasTruncatedExamples
+                  | TipFormatter.TipFormatterResult.Error err ->
+                    logger.warn (Log.setMessage "[DEBUG-HOVER] XML lookup ERROR: {err}" >> Log.addContextDestructured "err" err)
+                    tooltipInfo.DocComment, tooltipInfo.HasTruncatedExamples
+                | TryGetToolTipEnhancedResult.Symbol _ ->
+                  logger.warn (Log.setMessage "[DEBUG-HOVER] DocComment NOT empty, skipping XML lookup")
+                  tooltipInfo.DocComment, tooltipInfo.HasTruncatedExamples
+                | TryGetToolTipEnhancedResult.Keyword _ ->
+                  logger.warn (Log.setMessage "[DEBUG-HOVER] Keyword, not Symbol")
+                  tooltipInfo.DocComment, tooltipInfo.HasTruncatedExamples
+
               let response =
                 { Contents =
                     U3.C3
@@ -1088,12 +1130,12 @@ type AdaptiveFSharpLspServer
                          tooltipResult.Signature
                          |> TipFormatter.prepareSignature
                          |> (fun content -> U2.C2 { Language = "fsharp"; Value = content })
-                         U2.C1 tooltipInfo.DocComment
+                         U2.C1 docComment
                          match tooltipResult.SymbolInfo with
                          | TryGetToolTipEnhancedResult.Keyword _ -> ()
                          | TryGetToolTipEnhancedResult.Symbol symbolInfo ->
                            TipFormatter.renderShowDocumentationLink
-                             tooltipInfo.HasTruncatedExamples
+                             hasTruncatedExamples
                              symbolInfo.XmlDocSig
                              symbolInfo.Assembly
                            |> U2.C1
@@ -2971,6 +3013,12 @@ type AdaptiveFSharpLspServer
 
           match! Commands.FormattedDocumentation tyRes pos lineStr |> Result.ofCoreResponse with
           | Some(tip, xml, signature, footer, xmlKey) ->
+            // DEBUG: Log FSharpDocumentation result
+            logger.warn (
+              Log.setMessage "[DEBUG-INFOPANEL] FSharpDocumentation: hasTip={hasTip}, xmlSig={xmlSig}"
+              >> Log.addContextDestructured "hasTip" (tip.IsSome)
+              >> Log.addContextDestructured "xmlSig" xml
+            )
             return
               Some
                 { Content =
@@ -2981,7 +3029,9 @@ type AdaptiveFSharpLspServer
                          Signature = signature
                          Footer = footer
                          XmlKey = xmlKey |} }
-          | None -> return None
+          | None ->
+            logger.warn (Log.setMessage "[DEBUG-INFOPANEL] FSharpDocumentation: returned None")
+            return None
         with e ->
           trace |> Tracing.recordException e
 
@@ -3003,6 +3053,13 @@ type AdaptiveFSharpLspServer
             >> Log.addContextDestructured "params" p
           )
 
+          // DEBUG: Log input parameters
+          logger.warn (
+            Log.setMessage "[DEBUG-INFOPANEL] FSharpDocumentationSymbol input: XmlSig={xmlSig}, Assembly={asm}"
+            >> Log.addContextDestructured "xmlSig" p.XmlSig
+            >> Log.addContextDestructured "asm" p.Assembly
+          )
+
           let! tyRes =
             lastFSharpDocumentationTypeCheck
             |> Result.ofOption (fun () -> $"No typecheck results from FSharpDocumentation")
@@ -3012,8 +3069,17 @@ type AdaptiveFSharpLspServer
             Commands.FormattedDocumentationForSymbol tyRes p.XmlSig p.Assembly
             |> Result.ofCoreResponse
           with
-          | None -> return None
+          | None ->
+            logger.warn (Log.setMessage "[DEBUG-INFOPANEL] FSharpDocumentationSymbol: FormattedDocumentationForSymbol returned None")
+            return None
           | Some(xml, assembly, xmlDoc, signature, footer, xmlKey) ->
+            // DEBUG: Log xmlDoc content
+            let xmlDocStr = xmlDoc.ToString()
+            logger.warn (
+              Log.setMessage "[DEBUG-INFOPANEL] FSharpDocumentationSymbol result: xmlDocLength={len}, xmlDocStr={doc}"
+              >> Log.addContextDestructured "len" xmlDocStr.Length
+              >> Log.addContextDestructured "doc" (if xmlDocStr.Length > 200 then xmlDocStr.Substring(0, 200) + "..." else xmlDocStr)
+            )
 
             return
               { Content =

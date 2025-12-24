@@ -893,8 +893,12 @@ module DocumentationFormatter =
         //ValueTypes
         let signature = getFuncSignature symbol.DisplayContext func
         Some((signature, EntityInfo.Empty), footerForType symbol, cn)
-      | _ ->
-        //ReferenceType constructor
+      | Some ent ->
+        //ReferenceType constructor - show the type signature with members
+        let signature = getEntitySignature symbol.DisplayContext ent
+        Some(signature, footerForType symbol, cn)
+      | None ->
+        //Fallback to constructor signature if no enclosing entity
         let signature = getFuncSignature symbol.DisplayContext func
         Some((signature, EntityInfo.Empty), footerForType symbol, cn)
 
