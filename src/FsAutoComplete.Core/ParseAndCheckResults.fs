@@ -107,17 +107,22 @@ type ParseAndCheckResults
             sprintf "Error while decompiling symbol '%A' in file '%s': %s\n%s" symbol file exn.Message exn.StackTrace
           )
 
-      /// these are all None because you can't easily get the source file from the external symbol information here.
-      let tryGetSourceRangeForSymbol
-        (sym: FindDeclExternalSymbol)
-        : (string<NormalizedRepoPathSegment> * Position) option =
-        match sym with
-        | FindDeclExternalSymbol.Type _ -> None
-        | FindDeclExternalSymbol.Constructor _ -> None
-        | FindDeclExternalSymbol.Method _ -> None
-        | FindDeclExternalSymbol.Field _ -> None
-        | FindDeclExternalSymbol.Event _ -> None
-        | FindDeclExternalSymbol.Property _ -> None
+      /// Attempts to get source file info for SourceLink lookup by using GetSymbolUseAtLocation
+      /// to get the full FSharpSymbol which has DeclarationLocation and Assembly.FileName
+      let tryGetSourceInfoForExternalSymbol ()
+        : (string<LocalPath> * string<NormalizedRepoPathSegment> * Position) option =
+        match checkResults.GetSymbolUseAtLocation(pos.Line, int col, lineStr, identIsland) with
+        | None -> None
+        | Some symbolUse ->
+          match symbolUse.Symbol.DeclarationLocation with
+          | None -> None
+          | Some declLoc ->
+            match symbolUse.Symbol.Assembly.FileName with
+            | None -> None
+            | Some assemblyPath ->
+              let dllFile = Utils.normalizePath assemblyPath
+              let sourceFile = getFileName declLoc
+              Some(dllFile, sourceFile, declLoc.Start)
 
       // attempts to manually discover symbol use and external symbol information for a range that doesn't exist in a local file
       // bugfix/workaround for FCS returning invalid decl found for f# members.
@@ -207,16 +212,16 @@ type ParseAndCheckResults
             | Error reason -> return ResultOrString.Error(sprintf "%A" reason)
           | Error e -> return Error e
         | FindDeclResult.ExternalDecl(assembly, externalSym) ->
-          // not enough info on external symbols to get a range-like thing :(
-          match tryGetSourceRangeForSymbol externalSym with
-          | Some(sourceFile, pos) ->
-            match! Sourcelink.tryFetchSourcelinkFile (UMX.tag<LocalPath> assembly) sourceFile with
+          // Try to get source info via symbol lookup for SourceLink
+          match tryGetSourceInfoForExternalSymbol () with
+          | Some(dllFile, sourceFile, sourcePos) ->
+            match! Sourcelink.tryFetchSourcelinkFile dllFile sourceFile with
             | Ok localFilePath ->
               return
                 ResultOrString.Ok(
                   FindDeclarationResult.ExternalDeclaration
                     { File = UMX.untag localFilePath
-                      Position = pos }
+                      Position = sourcePos }
                 )
             | Error _ ->
               logger.info (
@@ -225,7 +230,14 @@ type ParseAndCheckResults
               )
 
               return decompile assembly externalSym
-          | None -> return decompile assembly externalSym
+          | None ->
+            // Symbol lookup failed, fall back to decompilation
+            logger.info (
+              Log.setMessage "Could not get symbol info for SourceLink lookup, decompiling {assembly}"
+              >> Log.addContextDestructured "assembly" assembly
+            )
+
+            return decompile assembly externalSym
       }
 
   member __.TryFindTypeDeclaration (pos: Position) (lineStr: LineStr) =
